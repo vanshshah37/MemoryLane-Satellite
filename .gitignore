@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Environment credentials & local configs
+.env
+.env.local
+.env.*.local
+cdse_token.json
+credentials.json
+
+# Raw satellite imagery & large downloads
+data/raw/*
+!data/raw/.gitkeep
+*.SAFE/
+*.SAFE.zip
+*.zip
+*.tar.gz
+*.jp2
+
+# Processed rasters, intermediate products & COGs
+data/processed/*
+!data/processed/.gitkeep
+cog/*
+!cog/.gitkeep
+*.tif
+*.tiff
+*.vrt
+
+# Tile server cache / logs
+server/cache/
+*.log
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
