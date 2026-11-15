@@ -11,8 +11,14 @@ Designed as an independent imagery service for **Memory-Lane**, requiring **no p
 ```
 Copernicus Data Space (Sentinel-2 L2A)
   │
-  ▼  (STAC API Discovery / HTTPS or S3 Access for B04, B03, B02, B08 + SCL)
-scripts/search_scenes.py & scripts/download_sentinel.py
+  ▼  (STAC API Discovery / Paginated Multi-Tile Traversal & Multi-Criteria Ranking)
+scripts/search_scenes.py ──▶ data/search_manifest.json
+  │
+  ▼  (HTTPS Bearer Auth or S3 Protocol / Resilient Streaming & Atomic Writes)
+scripts/download_sentinel.py ──▶ data/raw/<date>_<tile>_<scene_id>/
+  │                               ├── B02, B03, B04, B08, SCL (.jp2 / .tif)
+  │                               ├── scene_metadata.json
+  │                               └── radiometric_metadata.json (extracted via extract_radiometric_metadata)
   │
   ▼  (AOI Windowing ~23x26 km, SCL Resampling, QA Masking: Class 1, 3, 7, 8, 9, 10 + Edge Buffering)
 processing/build_composite.py
@@ -40,13 +46,9 @@ MapLibre GL JS (Frontend Map)
 
 * **Region:** Himachal Pradesh, Western Himalayas, India
 * **Bounding Box (BBOX):** `[77.05, 32.15, 77.30, 32.38]` (WGS84 EPSG:4326)
-* **Actual Dimensions:** Approximately **23.5 km × 25.5 km** (~23 × 26 km, ~600 km² coverage)
+* **Actual Dimensions:** Approximately **23.5 km × 25.5 km** (~600 km² coverage)
 * **Projection:** UTM Zone 43N (`EPSG:32643`)
-* **Himalayan Terrain Strategy:**
-  * **Metadata-Aware Radiometric Calibration:** Accounts for Processing Baseline offset differences ($\text{BOA\_ADD\_OFFSET} = -1000$ for Baseline $\ge$ 04.00, $0$ for older), strictly preserving $DN=0$ as NoData.
-  * **Deterministic Snow vs. Cloud Separation:** Sentinel-2 Scene Classification Layer (SCL) class 11 (Snow/Ice) is strictly preserved, while classes 1 (defective/saturated), 3 (shadow), 7 (unclassified/marginal), and 8, 9, 10 (clouds) are masked out.
-  * **Cloud-Edge Buffering:** Configurable morphological dilation (default: 30 meters) buffers cloud boundaries without eroding snow fields.
-  * **Separate Analytical & QA Products:** 4-band 10m reflectance (B04, B03, B02, B08) is exported separately from the 10m SCL QA raster and the 8-bit display RGB.
+* **MGRS Tile Coverage:** Spans two adjacent tiles: **`43SFR`** (~70.98% coverage) and **`43SGR`** (~70.80% coverage). Both tiles are required for 100% coverage. Both are captured simultaneously in relative orbit **`R105`**.
 
 ---
 
@@ -56,25 +58,31 @@ MapLibre GL JS (Frontend Map)
 MemoryLane-Satellite/
 ├── .env.example              # Environment template (CDSE credentials, S3, AOI, thresholds)
 ├── .gitignore                # Git ignore rules for rasters, credentials & virtualenvs
+├── pytest.ini                # Pytest configuration (pythonpath = .)
 ├── requirements.txt          # Python dependencies with Windows pre-compiled binary wheels
 ├── README.md                 # Project guide & quickstart runbook
 ├── cog/                      # Output Cloud Optimized GeoTIFF storage
 ├── data/
-│   ├── raw/                  # Downloaded Sentinel-2 single-band rasters
-│   └── processed/            # 16-bit reflectance, SCL QA, and 8-bit masked RGBA composites
+│   ├── raw/                  # Downloaded Sentinel-2 tiles (<date>_<tile>_<scene_id>/)
+│   ├── processed/            # 16-bit reflectance, SCL QA, and 8-bit masked RGBA composites
+│   └── search_manifest.json  # Discovered scenes and per-tile candidate rankings
 ├── docs/
 │   ├── architecture.md       # Detailed technical design & mathematical formulas
 │   └── data-sources.md       # CDSE STAC endpoints, band specifications & SCL reference
 ├── processing/
-│   ├── build_composite.py    # Masking, buffering, reflectance preservation & RGB normalization
+│   ├── __init__.py
+│   ├── build_composite.py    # Masking, buffering, reflectance preservation & metadata extraction
 │   └── create_cog.py         # Cloud Optimized GeoTIFF conversion (DEFLATE standard)
 ├── scripts/
-│   ├── download_sentinel.py  # Selective band downloader via CDSE HTTPS or S3
-│   └── search_scenes.py      # STAC catalog search for candidate scenes
+│   ├── __init__.py
+│   ├── search_scenes.py      # STAC catalog query, pagination, multi-tile grouping & ranking
+│   └── download_sentinel.py  # Resilient multi-protocol asset downloader (HTTPS / S3)
 ├── server/
 │   └── main.py               # Standalone TiTiler ASGI dynamic tile server
 └── tests/
-    └── test_pipeline.py      # Unit and smoke tests for pipeline modules
+    ├── test_acquisition.py   # Unit tests for STAC search, pagination, S3/HTTPS & downloads
+    ├── test_composite.py     # Unit tests for multi-tile mosaicking, hole filling, soft-knee RGB & COGs
+    └── test_pipeline.py      # Unit tests for metadata extraction, BOA math, QA & COGs
 ```
 
 ---
@@ -115,31 +123,70 @@ CDSE_S3_SECRET_KEY=your_secret_key
 
 ---
 
-## Step-by-Step Execution Workflow
+## Sentinel-2 Acquisition Workflow
 
-Once the setup is reviewed and confirmed, pipeline execution proceeds as follows:
+The acquisition pipeline runs in two decoupled steps:
 
-1. **Search Scenes:**
-   ```powershell
-   python scripts/search_scenes.py --cloud-max 20 --start-date 2024-09-15 --end-date 2024-10-31
-   ```
-2. **Download Target Bands Intersecting AOI:**
-   ```powershell
-   python scripts/download_sentinel.py --scene-id <SELECTED_SCENE_ID>
-   ```
-3. **Build Products & Convert to COG:**
-   ```powershell
-   # Generates 16-bit 4-band reflectance, SCL QA, and 8-bit masked RGB
-   python processing/build_composite.py
-   # Generates DEFLATE-compressed Cloud Optimized GeoTIFF
-   python processing/create_cog.py
-   ```
-4. **Launch Local TiTiler Tile Server:**
-   ```powershell
-   uvicorn server.main:app --host 127.0.0.1 --port 8000 --reload
-   ```
-   * Interactive OpenAPI docs: `http://127.0.0.1:8000/docs`
-   * Dynamic XYZ Tile endpoint: `http://127.0.0.1:8000/cog/tiles/WebMercatorQuad/{z}/{x}/{y}.png?url=D:/Projects/MemoryLane-Satellite/cog/manali_solang_rgb.tif`
+### Step 1: Search & Multi-Tile Candidate Ranking
+```powershell
+python scripts/search_scenes.py `
+  --bbox 77.05,32.15,77.30,32.38 `
+  --start-date 2024-09-15 `
+  --end-date 2024-10-31 `
+  --cloud-max 20 `
+  --output-manifest data/search_manifest.json
+```
+* Queries CDSE STAC with full pagination.
+* Discovers all intersecting MGRS tiles (e.g., `43SDR`).
+* Ranks scenes per tile using cloud cover, target date proximity, and band completeness.
+* Generates `data/search_manifest.json`.
+
+### Step 2: Resilient Asset Acquisition
+```powershell
+python scripts/download_sentinel.py `
+  --manifest data/search_manifest.json `
+  --output-dir data/raw
+```
+* Authenticates with CDSE Keycloak and manages Bearer token renewal.
+* Downloads `B02`, `B03`, `B04`, `B08`, `SCL`, and metadata XML via HTTPS or native S3.
+* Performs atomic writes (`.part` temporary files) and verifies `Content-Length`.
+* Skips existing verified files.
+* Automatically runs `extract_radiometric_metadata()` and creates `radiometric_metadata.json` inside each tile's directory.
+
+### Step 3: Multi-Tile Mosaicking & Natural RGB Generation
+```powershell
+python processing/build_composite.py `
+  --tiles data/raw/20241015_43SFR_S2B data/raw/20241015_43SGR_S2B `
+  --bbox 77.05,32.15,77.30,32.38 `
+  --output-dir data/processed
+```
+* Snaps AOI to exact 10.0m UTM Zone 43N grid (2305 × 2599 pixels).
+* Calibrates surface reflectance using extracted per-band radiometric offsets.
+* Merges `43SFR` and `43SGR` with overlap blending and cloud hole-filling.
+* Synthesizes natural color RGB with soft-knee highlight compression (preserving snow facets).
+* Produces `data/processed/manali_solang_reflectance.tif`, `manali_solang_scl.tif`, and `manali_solang_rgb_display.tif`.
+
+### Step 4: Cloud Optimized GeoTIFF (COG) Creation
+```powershell
+python processing/create_cog.py `
+  --processed-dir data/processed `
+  --cog-dir cog
+```
+* Converts processed rasters to COG using internal $512 \times 512$ tiling and overviews.
+* Compresses with DEFLATE (`PREDICTOR=2`) for 100% native Windows compatibility.
+* Validates generated COGs with `rio_cogeo.cogeo.cog_validate()`.
+* Generates `cog/manali_solang_rgb.tif`, `cog/manali_solang_reflectance.tif`, and `cog/manali_solang_scl.tif`.
+
+---
+
+## Running Automated Tests
+
+Run the full test suite (36 unit and integration tests) using pytest:
+```powershell
+.\.venv\Scripts\pytest -v tests/
+```
+
+All network calls in tests are mocked; no real satellite imagery downloads or CDSE credentials are required for verification.
 
 ---
 
