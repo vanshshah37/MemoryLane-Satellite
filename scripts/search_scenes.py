@@ -40,11 +40,11 @@ REQUIRED_ASSETS = ("B02", "B03", "B04", "B08", "SCL")
 
 # Asset alias mapping to handle different STAC conventions
 ASSET_KEY_ALIASES = {
-    "B02": ["B02", "b02", "blue", "B2", "b2"],
-    "B03": ["B03", "b03", "green", "B3", "b3"],
-    "B04": ["B04", "b04", "red", "B4", "b4"],
-    "B08": ["B08", "b08", "nir", "B8", "b8", "nir08"],
-    "SCL": ["SCL", "scl", "scene_classification", "classification"],
+    "B02": ["B02_10m", "B02", "b02", "blue", "B2", "b2"],
+    "B03": ["B03_10m", "B03", "b03", "green", "B3", "b3"],
+    "B04": ["B04_10m", "B04", "b04", "red", "B4", "b4"],
+    "B08": ["B08_10m", "B08", "b08", "nir", "B8", "b8", "nir08"],
+    "SCL": ["SCL_20m", "SCL", "scl", "scene_classification", "classification"],
 }
 
 MGRS_REGEX = re.compile(r"_T([0-9]{2}[A-Z]{3})_")
@@ -134,7 +134,7 @@ def resolve_scene_assets(item: Dict[str, Any]) -> Tuple[Dict[str, AssetInfo], Li
             missing.append(target_key)
 
     # Capture metadata XML asset if present
-    for meta_key in ("PRODUCT_METADATA", "GRANULE_METADATA", "metadata", "MTD_TL", "MTD_MSIL2A"):
+    for meta_key in ("METADATA_XML", "granule_metadata", "product_metadata", "PRODUCT_METADATA", "GRANULE_METADATA", "metadata", "MTD_TL", "MTD_MSIL2A"):
         if meta_key in raw_assets:
             resolved["METADATA_XML"] = AssetInfo(
                 key="METADATA_XML",
@@ -148,21 +148,25 @@ def resolve_scene_assets(item: Dict[str, Any]) -> Tuple[Dict[str, AssetInfo], Li
 
 
 def parse_stac_item(item: Dict[str, Any]) -> SceneCandidate:
-    """Parses a single STAC item into a SceneCandidate dataclass."""
+    """Parses a single STAC item or serialized SceneCandidate into a SceneCandidate dataclass."""
     props = item.get("properties", {})
-    mgrs_tile = extract_mgrs_tile(item)
+    mgrs_tile = item.get("mgrs_tile") or extract_mgrs_tile(item)
     resolved_assets, missing_assets = resolve_scene_assets(item)
 
-    cloud_cover = float(props.get("eo:cloud_cover", 100.0))
-    dt_str = props.get("datetime", "")
+    cloud_cover = float(item.get("cloud_cover", props.get("eo:cloud_cover", 100.0)))
+    dt_str = item.get("datetime") or props.get("datetime", "")
 
-    baseline = props.get(
-        "s2:processing_baseline",
-        props.get("processing:software", {}).get("sentinel2-l2a", "UNKNOWN"),
+    baseline = item.get("processing_baseline") or props.get(
+        "processing:version",
+        props.get(
+            "s2:processing_baseline",
+            props.get("processing:software", {}).get("sentinel2-l2a", "UNKNOWN"),
+        ),
     )
+    scene_id = item.get("scene_id") or item.get("id", "")
 
     return SceneCandidate(
-        scene_id=item.get("id", ""),
+        scene_id=scene_id,
         mgrs_tile=mgrs_tile,
         datetime=dt_str,
         cloud_cover=cloud_cover,

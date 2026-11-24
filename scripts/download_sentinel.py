@@ -27,6 +27,7 @@ Features:
   and persist per-band radiometric parameters (quantification_value and boa_add_offset).
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
@@ -34,9 +35,13 @@ import logging
 import os
 from pathlib import Path
 import re
+import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
+
+# Ensure project root is in sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv
 import rasterio
@@ -347,14 +352,18 @@ class AssetDownloader:
         attempt = 0
         last_error = None
 
+        parsed_url = urlparse(url)
+        is_cdse = bool(CDSE_DOMAIN_PATTERN.match(parsed_url.netloc))
+
         while attempt < self.max_retries:
             attempt += 1
             try:
-                token = self.auth.get_valid_token()
                 headers = {
-                    "Authorization": f"Bearer {token}",
                     "User-Agent": "MemoryLane-Satellite/1.0",
                 }
+                if is_cdse:
+                    token = self.auth.get_valid_token()
+                    headers["Authorization"] = f"Bearer {token}"
 
                 with self._http.get(url, headers=headers, stream=True, timeout=60) as resp:
                     if resp.status_code == 401:
@@ -452,6 +461,7 @@ def download_tile_assets(
     downloaded_files: Dict[str, str] = {}
     failed_assets: List[str] = []
 
+    tasks = []
     for asset_key in TARGET_ASSETS:
         asset_info = assets.get(asset_key)
         if not asset_info or not getattr(asset_info, "href", None):
@@ -463,23 +473,34 @@ def download_tile_assets(
         parsed_path = urlparse(href).path
         ext = Path(parsed_path).suffix or ".jp2"
         target_path = tile_dir / f"{asset_key}{ext}"
-
-        try:
-            downloaded_path = downloader.download_asset(href, target_path)
-            downloaded_files[asset_key] = str(downloaded_path)
-        except Exception as e:
-            logger.error(f"Failed to download asset {asset_key}: {e}")
-            failed_assets.append(asset_key)
+        tasks.append((asset_key, href, target_path))
 
     metadata_asset = assets.get("METADATA_XML")
     xml_path = None
     if metadata_asset and getattr(metadata_asset, "href", None):
         target_xml = tile_dir / "MTD_TL.xml"
+        tasks.append(("METADATA_XML", metadata_asset.href, target_xml))
+
+    def _download_task(item):
+        k, url, dst = item
         try:
-            xml_path = downloader.download_asset(metadata_asset.href, target_xml)
-            downloaded_files["METADATA_XML"] = str(xml_path)
+            res_path = downloader.download_asset(url, dst)
+            return k, str(res_path), None
         except Exception as e:
-            logger.warning(f"Could not download metadata XML: {e}")
+            return k, None, e
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(_download_task, t): t for t in tasks}
+        for future in as_completed(futures):
+            key, path_str, err = future.result()
+            if err:
+                logger.error(f"Failed to download asset {key}: {err}")
+                if key in TARGET_ASSETS:
+                    failed_assets.append(key)
+            else:
+                downloaded_files[key] = path_str
+                if key == "METADATA_XML":
+                    xml_path = Path(path_str)
 
     scene_meta_path = tile_dir / "scene_metadata.json"
     candidate_dict = scene_candidate.to_dict() if hasattr(scene_candidate, "to_dict") else scene_candidate

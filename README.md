@@ -177,6 +177,22 @@ python processing/create_cog.py `
 * Validates generated COGs with `rio_cogeo.cogeo.cog_validate()`.
 * Generates `cog/manali_solang_rgb.tif`, `cog/manali_solang_reflectance.tif`, and `cog/manali_solang_scl.tif`.
 
+### Step 5: Launch Local TiTiler Tile Server & Preview
+```powershell
+python server/main.py --host 127.0.0.1 --port 8000
+```
+* Serves dynamic Slippy Map XYZ tiles at `http://127.0.0.1:8000/tiles/{z}/{x}/{y}.png`.
+* Provides TileJSON 3.0 specification at `http://127.0.0.1:8000/tilejson.json`.
+* Embeds a standalone MapLibre GL JS web preview at `http://127.0.0.1:8000/` with interactive 3D pitch controls and opacity sliders.
+
+---
+
+## Alternative: Fast AOI Streaming (Zero Credentials)
+To fetch only the intersecting AOI window directly without CDSE credentials using the AWS Open Data mirror:
+```powershell
+python scripts/fetch_aoi_tiles.py
+```
+
 ---
 
 ## Running Automated Tests

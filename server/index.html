@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MemoryLane-Satellite — Sentinel-2 L2A Live Preview</title>
+  <!-- MapLibre GL JS -->
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body, html { width: 100%; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; overflow: hidden; background: #0b0f19; }
+    #map { width: 100%; height: 100%; position: absolute; top: 0; bottom: 0; }
+    
+    /* Info / Attribution Panel */
+    .info-card {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      z-index: 10;
+      background: rgba(15, 23, 42, 0.94);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 8px;
+      color: #f1f5f9;
+      padding: 16px 20px;
+      max-width: 380px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+    }
+    .info-card h1 {
+      font-size: 15px;
+      font-weight: 700;
+      color: #38bdf8;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .badge {
+      display: inline-block;
+      font-size: 10px;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #0284c7;
+      color: #fff;
+    }
+    .info-table {
+      width: 100%;
+      font-size: 12px;
+      margin-top: 8px;
+      border-collapse: collapse;
+    }
+    .info-table td {
+      padding: 4px 0;
+      vertical-align: top;
+    }
+    .info-table td.label {
+      color: #94a3b8;
+      width: 40%;
+      font-weight: 500;
+    }
+    .info-table td.value {
+      color: #e2e8f0;
+      font-weight: 600;
+    }
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      margin-right: 6px;
+    }
+
+    /* Slider Container */
+    .opacity-control {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 12px;
+      color: #cbd5e1;
+    }
+    .opacity-control input[type=range] {
+      flex: 1;
+      cursor: pointer;
+    }
+
+    /* Controls Panel */
+    .controls-panel {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .btn-toggle {
+      background: rgba(15, 23, 42, 0.94);
+      backdrop-filter: blur(8px);
+      color: #f1f5f9;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      padding: 8px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .btn-toggle:hover {
+      background: #1e293b;
+      border-color: #38bdf8;
+    }
+    .btn-toggle.active {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: #fff;
+    }
+
+    /* Coordinate Box */
+    .coord-bar {
+      position: absolute;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      background: rgba(15, 23, 42, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 20px;
+      padding: 4px 16px;
+      font-size: 11px;
+      color: #94a3b8;
+      font-family: monospace;
+      pointer-events: none;
+    }
+
+    /* Alert Banner */
+    #error-banner {
+      display: none;
+      position: absolute;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 100;
+      background: #ef4444;
+      color: white;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+  </style>
+</head>
+<body>
+  <div id="error-banner"></div>
+  <div id="map"></div>
+
+  <!-- Info Card -->
+  <div class="info-card">
+    <h1>
+      <span class="status-dot"></span>
+      MemoryLane Satellite Preview
+      <span class="badge">10m COG</span>
+    </h1>
+    <table class="info-table">
+      <tr>
+        <td class="label">Source</td>
+        <td class="value">Copernicus Sentinel-2 L2A</td>
+      </tr>
+      <tr>
+        <td class="label">Resolution</td>
+        <td class="value">10.0 meters / pixel</td>
+      </tr>
+      <tr>
+        <td class="label">Acquisition Date</td>
+        <td class="value" id="val-date">2024-10-15 (Orbit R105)</td>
+      </tr>
+      <tr>
+        <td class="label">Coverage</td>
+        <td class="value">Manali–Solang, Himachal Pradesh</td>
+      </tr>
+      <tr>
+        <td class="label">MGRS Tiles</td>
+        <td class="value">43SFR (West) &amp; 43SGR (East)</td>
+      </tr>
+      <tr>
+        <td class="label">AOI Extent</td>
+        <td class="value">[77.05, 32.15, 77.30, 32.38]</td>
+      </tr>
+      <tr>
+        <td class="label">Raster Grid</td>
+        <td class="value">2305 &times; 2599 px (UTM 43N)</td>
+      </tr>
+      <tr>
+        <td class="label">Tile Endpoint</td>
+        <td class="value" style="font-family: monospace; font-size: 11px;" id="val-endpoint">/tiles/{z}/{x}/{y}.png</td>
+      </tr>
+    </table>
+
+    <div class="opacity-control">
+      <span>Satellite Opacity:</span>
+      <input type="range" id="satellite-opacity" min="0" max="100" value="100">
+      <span id="opacity-label">100%</span>
+    </div>
+  </div>
+
+  <!-- Controls Panel -->
+  <div class="controls-panel">
+    <button id="btn-toggle-terrain" class="btn-toggle">
+      <span>🏔️ 3D Terrain Pitch</span>
+    </button>
+    <button id="btn-reset-view" class="btn-toggle">
+      <span>🎯 Center AOI</span>
+    </button>
+    <button id="btn-toggle-outline" class="btn-toggle active">
+      <span>🔲 AOI Boundary</span>
+    </button>
+  </div>
+
+  <!-- Coordinates Bar -->
+  <div class="coord-bar" id="coord-display">
+    Lon: 77.17500 | Lat: 32.26500 | Zoom: 12.0
+  </div>
+
+  <script>
+    const aoiCenter = [77.175, 32.265];
+    const aoiBounds = [77.05, 32.15, 77.30, 32.38];
+
+    function showError(msg) {
+      const b = document.getElementById('error-banner');
+      b.textContent = msg;
+      b.style.display = 'block';
+    }
+
+    const mapStyle = {
+      version: 8,
+      sources: {
+        'osm-base': {
+          type: 'raster',
+          tiles: [
+            'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
+          ],
+          tileSize: 256,
+          attribution: '&copy; OpenStreetMap contributors'
+        },
+        'satellite-cog': {
+          type: 'raster',
+          tiles: ['/tiles/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          minzoom: 8,
+          maxzoom: 16,
+          attribution: 'Copernicus Sentinel data [2024] / MemoryLane-Satellite'
+        },
+        'aoi-box': {
+          type: 'geojson',
+          data: {
+            type: 'Feature',
+            geometry: {
+              type: 'Polygon',
+              coordinates: [[
+                [77.05, 32.15],
+                [77.30, 32.15],
+                [77.30, 32.38],
+                [77.05, 32.38],
+                [77.05, 32.15]
+              ]]
+            }
+          }
+        }
+      },
+      layers: [
+        {
+          id: 'background',
+          type: 'background',
+          paint: { 'background-color': '#0b0f19' }
+        },
+        {
+          id: 'osm-layer',
+          type: 'raster',
+          source: 'osm-base',
+          paint: { 'raster-opacity': 0.85 }
+        },
+        {
+          id: 'satellite-layer',
+          type: 'raster',
+          source: 'satellite-cog',
+          paint: {
+            'raster-opacity': 1.0,
+            'raster-resampling': 'linear'
+          }
+        },
+        {
+          id: 'aoi-outline',
+          type: 'line',
+          source: 'aoi-box',
+          paint: {
+            'line-color': '#38bdf8',
+            'line-width': 2.5,
+            'line-dasharray': [3, 2]
+          }
+        }
+      ]
+    };
+
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: mapStyle,
+      center: aoiCenter,
+      zoom: 11.5,
+      maxZoom: 16,
+      minZoom: 8,
+      pitch: 0,
+      bearing: 0
+    });
+
+    map.on('error', (e) => {
+      console.warn('MapLibre event:', e);
+      // Only display fatal initialization/style errors in the banner
+      if (e && e.error && e.error.message && !e.error.message.includes('tile') && !e.error.message.includes('source image')) {
+        showError('Map error: ' + e.error.message);
+      }
+    });
+
+    // Navigation and Scale Controls
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
+    map.addControl(new maplibregl.ScaleControl({ maxWidth: 150, unit: 'metric' }), 'bottom-left');
+
+    // Update coordinate display on mouse move
+    map.on('mousemove', (e) => {
+      document.getElementById('coord-display').textContent =
+        `Lon: ${e.lngLat.lng.toFixed(5)} | Lat: ${e.lngLat.lat.toFixed(5)} | Zoom: ${map.getZoom().toFixed(1)}`;
+    });
+
+    // Opacity slider
+    const opacitySlider = document.getElementById('satellite-opacity');
+    const opacityLabel = document.getElementById('opacity-label');
+    opacitySlider.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value) / 100.0;
+      opacityLabel.textContent = `${e.target.value}%`;
+      if (map.getLayer('satellite-layer')) {
+        map.setPaintProperty('satellite-layer', 'raster-opacity', val);
+      }
+    });
+
+    // 3D Pitch / Terrain toggle
+    let isPitched = false;
+    const terrainBtn = document.getElementById('btn-toggle-terrain');
+    terrainBtn.addEventListener('click', () => {
+      isPitched = !isPitched;
+      if (isPitched) {
+        map.easeTo({ pitch: 58, bearing: -20, duration: 1200 });
+        terrainBtn.classList.add('active');
+        terrainBtn.innerHTML = '<span>Flat 2D View</span>';
+      } else {
+        map.easeTo({ pitch: 0, bearing: 0, duration: 1000 });
+        terrainBtn.classList.remove('active');
+        terrainBtn.innerHTML = '<span>🏔️ 3D Terrain Pitch</span>';
+      }
+    });
+
+    // Reset View button
+    document.getElementById('btn-reset-view').addEventListener('click', () => {
+      map.fitBounds(aoiBounds, { padding: 40, duration: 1000 });
+    });
+
+    // AOI Outline toggle
+    let outlineVisible = true;
+    const outlineBtn = document.getElementById('btn-toggle-outline');
+    outlineBtn.addEventListener('click', () => {
+      outlineVisible = !outlineVisible;
+      if (map.getLayer('aoi-outline')) {
+        map.setLayoutProperty('aoi-outline', 'visibility', outlineVisible ? 'visible' : 'none');
+        outlineBtn.classList.toggle('active', outlineVisible);
+      }
+    });
+
+    // Fetch server info
+    fetch('/info')
+      .then(r => r.json())
+      .then(info => {
+        if (info.datetime) {
+          document.getElementById('val-date').textContent = info.datetime;
+        }
+      })
+      .catch(err => console.log('Info fetch error:', err));
+  </script>
+</body>
+</html>
